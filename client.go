@@ -39,7 +39,8 @@ const requestTimeout time.Duration = time.Duration(30) * time.Second
 // A Client makes request to the federation listeners of matrix
 // homeservers
 type Client struct {
-	client http.Client
+	client    http.Client
+	userAgent string
 }
 
 // UserInfo represents information about a user.
@@ -143,6 +144,12 @@ func (f *federationTripper) RoundTrip(r *http.Request) (*http.Response, error) {
 
 	// just return the most recent error
 	return nil, err
+}
+
+// SetUserAgent sets the user agent string that is sent in the headers of
+// outbound HTTP requests.
+func (fc *Client) SetUserAgent(ua string) {
+	fc.userAgent = ua
 }
 
 // LookupUserInfo gets information about a user from a given matrix homeserver
@@ -280,7 +287,11 @@ func (fc *Client) LookupServerKeys(
 	}
 
 	var body struct {
-		ServerKeyList []ServerKeys `json:"server_keys"`
+		ServerKeyList []json.RawMessage `json:"server_keys"`
+	}
+
+	var res struct {
+		ServerKeyList []ServerKeys
 	}
 
 	req, err := http.NewRequest("POST", url.String(), bytes.NewBuffer(requestBytes))
@@ -296,7 +307,14 @@ func (fc *Client) LookupServerKeys(
 		return nil, err
 	}
 
-	return body.ServerKeyList, nil
+	for _, field := range body.ServerKeyList {
+		var keys ServerKeys
+		if err := json.Unmarshal(field, &keys); err == nil {
+			res.ServerKeyList = append(res.ServerKeyList, keys)
+		}
+	}
+
+	return res.ServerKeyList, nil
 }
 
 // CreateMediaDownloadRequest creates a request for media on a homeserver and returns the http.Response or an error
@@ -384,6 +402,9 @@ func (fc *Client) DoHTTPRequest(ctx context.Context, req *http.Request) (*http.R
 	})
 	logger.Trace("Outgoing request")
 	newCtx := util.ContextWithLogger(ctx, logger)
+	if fc.userAgent != "" {
+		req.Header.Set("User-Agent", fc.userAgent)
+	}
 
 	start := time.Now()
 	resp, err := fc.client.Do(req.WithContext(newCtx))

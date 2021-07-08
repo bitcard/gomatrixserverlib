@@ -64,6 +64,8 @@ const (
 	MDirectToDevice = "m.direct_to_device"
 	// MDeviceListUpdate https://matrix.org/docs/spec/server_server/latest#m-device-list-update-schema
 	MDeviceListUpdate = "m.device_list_update"
+	// MReceipt https://matrix.org/docs/spec/server_server/r0.1.4#receipts
+	MReceipt = "m.receipt"
 )
 
 // StateNeeded lists the event types and state_keys needed to authenticate an event.
@@ -144,13 +146,20 @@ func (s StateNeeded) AuthEventReferences(provider AuthEventProvider) (refs []Eve
 	return
 }
 
+// The minimum amount of information we need to accumulate state for a membership event.
+type membershipContent struct {
+	Membership string `json:"membership"`
+	// We use the third_party_invite key to special case thirdparty invites.
+	ThirdPartyInvite *MemberThirdPartyInvite `json:"third_party_invite,omitempty"`
+}
+
 // StateNeededForEventBuilder returns the event types and state_keys needed to authenticate the
 // event being built. These events should be put under 'auth_events' for the event being built.
 // Returns an error if the state needed could not be calculated with the given builder, e.g
 // if there is a m.room.member without a membership key.
 func StateNeededForEventBuilder(builder *EventBuilder) (result StateNeeded, err error) {
 	// Extract the 'content' object from the event if it is m.room.member as we need to know 'membership'
-	var content *MemberContent
+	var content *membershipContent
 	if builder.Type == MRoomMember {
 		if err = json.Unmarshal(builder.Content, &content); err != nil {
 			err = errorf("unparsable member event content: %s", err.Error())
@@ -165,15 +174,12 @@ func StateNeededForEventBuilder(builder *EventBuilder) (result StateNeeded, err 
 
 // StateNeededForAuth returns the event types and state_keys needed to authenticate an event.
 // This takes a list of events to facilitate bulk processing when doing auth checks as part of state conflict resolution.
-func StateNeededForAuth(events []Event) (result StateNeeded) {
+func StateNeededForAuth(events []*Event) (result StateNeeded) {
 	for _, event := range events {
 		// Extract the 'content' object from the event if it is m.room.member as we need to know 'membership'
-		var content *MemberContent
+		var content *membershipContent
 		if event.Type() == MRoomMember {
-			c, err := NewMemberContentFromEvent(event)
-			if err == nil {
-				content = &c
-			}
+			_ = json.Unmarshal(event.Content(), &content)
 		}
 		// Ignore errors when accumulating state needed.
 		// The event will be rejected when the actual checks encounter the same error.
@@ -186,7 +192,7 @@ func StateNeededForAuth(events []Event) (result StateNeeded) {
 	return
 }
 
-func accumulateStateNeeded(result *StateNeeded, eventType, sender string, stateKey *string, content *MemberContent) (err error) {
+func accumulateStateNeeded(result *StateNeeded, eventType, sender string, stateKey *string, content *membershipContent) (err error) {
 	switch eventType {
 	case MRoomCreate:
 		// The create event doesn't require any state to authenticate.
@@ -333,7 +339,7 @@ func errorf(message string, args ...interface{}) error {
 // Allowed checks whether an event is allowed by the auth events.
 // It returns a NotAllowed error if the event is not allowed.
 // If there was an error loading the auth events then it returns that error.
-func Allowed(event Event, authEvents AuthEventProvider) error {
+func Allowed(event *Event, authEvents AuthEventProvider) error {
 	switch event.Type() {
 	case MRoomCreate:
 		return createEventAllowed(event)
@@ -352,7 +358,7 @@ func Allowed(event Event, authEvents AuthEventProvider) error {
 
 // createEventAllowed checks whether the m.room.create event is allowed.
 // It returns an error if the event is not allowed.
-func createEventAllowed(event Event) error {
+func createEventAllowed(event *Event) error {
 	if !event.StateKeyEquals("") {
 		return errorf("create event state key is not empty: %v", event.StateKey())
 	}
@@ -375,7 +381,7 @@ func createEventAllowed(event Event) error {
 
 // memberEventAllowed checks whether the m.room.member event is allowed.
 // Membership events have different authentication rules to ordinary events.
-func memberEventAllowed(event Event, authEvents AuthEventProvider) error {
+func memberEventAllowed(event *Event, authEvents AuthEventProvider) error {
 	allower, err := newMembershipAllower(authEvents, event)
 	if err != nil {
 		return err
@@ -385,7 +391,7 @@ func memberEventAllowed(event Event, authEvents AuthEventProvider) error {
 
 // aliasEventAllowed checks whether the m.room.aliases event is allowed.
 // Alias events have different authentication rules to ordinary events.
-func aliasEventAllowed(event Event, authEvents AuthEventProvider) error {
+func aliasEventAllowed(event *Event, authEvents AuthEventProvider) error {
 	// The alias events have different auth rules to ordinary events.
 	// In particular we allow any server to send a m.room.aliases event without checking if the sender is in the room.
 	// This allows server admins to update the m.room.aliases event for their server when they change the aliases on their server.
@@ -423,7 +429,7 @@ func aliasEventAllowed(event Event, authEvents AuthEventProvider) error {
 // powerLevelsEventAllowed checks whether the m.room.power_levels event is allowed.
 // It returns an error if the event is not allowed or if there was a problem
 // loading the auth events needed.
-func powerLevelsEventAllowed(event Event, authEvents AuthEventProvider) error {
+func powerLevelsEventAllowed(event *Event, authEvents AuthEventProvider) error {
 	allower, err := newEventAllower(authEvents, event.Sender())
 	if err != nil {
 		return err
@@ -712,7 +718,7 @@ func checkNotificationLevels(senderLevel int64, oldPowerLevels, newPowerLevels P
 // membership) on the event.
 // It returns an error if the event is not allowed or if there was a problem
 // loading the auth events needed.
-func redactEventAllowed(event Event, authEvents AuthEventProvider) error {
+func redactEventAllowed(event *Event, authEvents AuthEventProvider) error {
 	allower, err := newEventAllower(authEvents, event.Sender())
 	if err != nil {
 		return err
@@ -770,7 +776,7 @@ func redactEventAllowed(event Event, authEvents AuthEventProvider) error {
 // checks for events.
 // It returns an error if the event is not allowed or if there was a
 // problem loading the auth events needed.
-func defaultEventAllowed(event Event, authEvents AuthEventProvider) error {
+func defaultEventAllowed(event *Event, authEvents AuthEventProvider) error {
 	allower, err := newEventAllower(authEvents, event.Sender())
 	if err != nil {
 		return err
@@ -807,7 +813,7 @@ func newEventAllower(authEvents AuthEventProvider, senderID string) (e eventAllo
 
 // commonChecks does the checks that are applied to all events types other than
 // m.room.create, m.room.member, or m.room.alias.
-func (e *eventAllower) commonChecks(event Event) error {
+func (e *eventAllower) commonChecks(event *Event) error {
 	if event.RoomID() != e.create.roomID {
 		return errorf("create event has different roomID: %q != %q", event.RoomID(), e.create.roomID)
 	}
@@ -876,7 +882,7 @@ type membershipAllower struct {
 
 // newMembershipAllower loads the information needed to authenticate the m.room.member event
 // from the auth events.
-func newMembershipAllower(authEvents AuthEventProvider, event Event) (m membershipAllower, err error) { // nolint: gocyclo
+func newMembershipAllower(authEvents AuthEventProvider, event *Event) (m membershipAllower, err error) { // nolint: gocyclo
 	stateKey := event.StateKey()
 	if stateKey == nil {
 		err = errorf("m.room.member must be a state event")
@@ -917,7 +923,7 @@ func newMembershipAllower(authEvents AuthEventProvider, event Event) (m membersh
 }
 
 // membershipAllowed checks whether the membership event is allowed
-func (m *membershipAllower) membershipAllowed(event Event) error { // nolint: gocyclo
+func (m *membershipAllower) membershipAllowed(event *Event) error { // nolint: gocyclo
 	if m.create.roomID != event.RoomID() {
 		return errorf("create event has different roomID: %q != %q", event.RoomID(), m.create.roomID)
 	}
@@ -998,6 +1004,12 @@ func (m *membershipAllower) membershipAllowedFromThirdPartyInvite() error {
 
 // membershipAllowedSelf determines if the change made by the user to their own membership is allowed.
 func (m *membershipAllower) membershipAllowedSelf() error { // nolint: gocyclo
+	// NOTSPEC: Leave -> Leave is benign but not allowed according to the Matrix spec.
+	// We allow this because of an issue regarding Synapse incorrectly accepting this event.
+	if m.oldMember.Membership == Leave && m.newMember.Membership == Leave {
+		return nil
+	}
+
 	if m.newMember.Membership == Join {
 		// A user that is not in the room is allowed to join if the room
 		// join rules are "public".

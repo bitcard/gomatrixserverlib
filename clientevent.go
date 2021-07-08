@@ -15,9 +15,11 @@
 
 package gomatrixserverlib
 
+type ClientEventFormat int
+
 const (
 	// FormatAll will include all client event keys
-	FormatAll EventFormat = iota
+	FormatAll ClientEventFormat = iota
 	// FormatSync will include only the event keys required by the /sync API. Notably, this
 	// means the 'room_id' will be missing from the events.
 	FormatSync
@@ -26,10 +28,10 @@ const (
 // ClientEvent is an event which is fit for consumption by clients, in accordance with the specification.
 type ClientEvent struct {
 	Content        RawJSON   `json:"content"`
-	EventID        string    `json:"event_id"`
-	OriginServerTS Timestamp `json:"origin_server_ts"`
-	RoomID         string    `json:"room_id,omitempty"` // RoomID is omitted on /sync responses
-	Sender         string    `json:"sender"`
+	EventID        string    `json:"event_id,omitempty"`         // EventID is omitted on receipt events
+	OriginServerTS Timestamp `json:"origin_server_ts,omitempty"` // OriginServerTS is omitted on receipt events
+	RoomID         string    `json:"room_id,omitempty"`          // RoomID is omitted on /sync responses
+	Sender         string    `json:"sender,omitempty"`           // Sender is omitted on receipt events
 	StateKey       *string   `json:"state_key,omitempty"`
 	Type           string    `json:"type"`
 	Unsigned       RawJSON   `json:"unsigned,omitempty"`
@@ -37,7 +39,7 @@ type ClientEvent struct {
 }
 
 // ToClientEvents converts server events to client events.
-func ToClientEvents(serverEvs []Event, format EventFormat) []ClientEvent {
+func ToClientEvents(serverEvs []*Event, format ClientEventFormat) []ClientEvent {
 	evs := make([]ClientEvent, len(serverEvs))
 	for i, se := range serverEvs {
 		evs[i] = ToClientEvent(se, format)
@@ -46,7 +48,7 @@ func ToClientEvents(serverEvs []Event, format EventFormat) []ClientEvent {
 }
 
 // ToClientEvents converts server events to client events.
-func HeaderedToClientEvents(serverEvs []HeaderedEvent, format EventFormat) []ClientEvent {
+func HeaderedToClientEvents(serverEvs []*HeaderedEvent, format ClientEventFormat) []ClientEvent {
 	evs := make([]ClientEvent, len(serverEvs))
 	for i, se := range serverEvs {
 		evs[i] = HeaderedToClientEvent(se, format)
@@ -55,7 +57,7 @@ func HeaderedToClientEvents(serverEvs []HeaderedEvent, format EventFormat) []Cli
 }
 
 // ToClientEvent converts a single server event to a client event.
-func ToClientEvent(se Event, format EventFormat) ClientEvent {
+func ToClientEvent(se *Event, format ClientEventFormat) ClientEvent {
 	ce := ClientEvent{
 		Content:        RawJSON(se.Content()),
 		Sender:         se.Sender(),
@@ -73,7 +75,7 @@ func ToClientEvent(se Event, format EventFormat) ClientEvent {
 }
 
 // ToClientEvent converts a single server event to a client event.
-func HeaderedToClientEvent(se HeaderedEvent, format EventFormat) ClientEvent {
+func HeaderedToClientEvent(se *HeaderedEvent, format ClientEventFormat) ClientEvent {
 	ce := ClientEvent{
 		Content:        RawJSON(se.Content()),
 		Sender:         se.Sender(),

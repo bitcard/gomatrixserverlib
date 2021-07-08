@@ -151,15 +151,20 @@ func NewMemberContentFromAuthEvents(authEvents AuthEventProvider, userID string)
 		c.Membership = Leave
 		return
 	}
-	return NewMemberContentFromEvent(*memberEvent)
+	return NewMemberContentFromEvent(memberEvent)
 }
 
 // NewMemberContentFromEvent parse the member content from an event.
 // Returns an error if the content couldn't be parsed.
-func NewMemberContentFromEvent(event Event) (c MemberContent, err error) {
+func NewMemberContentFromEvent(event *Event) (c MemberContent, err error) {
 	if err = json.Unmarshal(event.Content(), &c); err != nil {
-		err = errorf("unparsable member event content: %s", err.Error())
-		return
+		var partial membershipContent
+		if err = json.Unmarshal(event.Content(), &partial); err != nil {
+			err = errorf("unparsable member event content: %s", err.Error())
+			return
+		}
+		c.Membership = partial.Membership
+		c.ThirdPartyInvite = partial.ThirdPartyInvite
 	}
 	return
 }
@@ -298,7 +303,7 @@ func NewPowerLevelContentFromAuthEvents(authEvents AuthEventProvider, creatorUse
 		return
 	}
 	if powerLevelsEvent != nil {
-		return NewPowerLevelContentFromEvent(*powerLevelsEvent)
+		return NewPowerLevelContentFromEvent(powerLevelsEvent)
 	}
 
 	// If there are no power levels then fall back to defaults.
@@ -332,26 +337,32 @@ func (c *PowerLevelContent) Defaults() {
 	// https://github.com/matrix-org/synapse/blob/v0.18.5/synapse/api/auth.py#L991
 	c.EventsDefault = 0
 	c.StateDefault = 50
+	// Default room notification level is 50
+	// https://matrix.org/docs/spec/client_server/r0.6.1#m-room-power-levels
+	c.Notifications = map[string]int64{
+		"room": 50,
+	}
 
 }
 
 // NewPowerLevelContentFromEvent loads the power level content from an event.
-func NewPowerLevelContentFromEvent(event Event) (c PowerLevelContent, err error) {
+func NewPowerLevelContentFromEvent(event *Event) (c PowerLevelContent, err error) {
 	// Set the levels to their default values.
 	c.Defaults()
 
 	// We can't extract the JSON directly to the powerLevelContent because we
 	// need to convert string values to int values.
 	var content struct {
-		InviteLevel       levelJSONValue            `json:"invite"`
-		BanLevel          levelJSONValue            `json:"ban"`
-		KickLevel         levelJSONValue            `json:"kick"`
-		RedactLevel       levelJSONValue            `json:"redact"`
-		UserLevels        map[string]levelJSONValue `json:"users"`
-		UsersDefaultLevel levelJSONValue            `json:"users_default"`
-		EventLevels       map[string]levelJSONValue `json:"events"`
-		StateDefaultLevel levelJSONValue            `json:"state_default"`
-		EventDefaultLevel levelJSONValue            `json:"event_default"`
+		InviteLevel        levelJSONValue            `json:"invite"`
+		BanLevel           levelJSONValue            `json:"ban"`
+		KickLevel          levelJSONValue            `json:"kick"`
+		RedactLevel        levelJSONValue            `json:"redact"`
+		UserLevels         map[string]levelJSONValue `json:"users"`
+		UsersDefaultLevel  levelJSONValue            `json:"users_default"`
+		EventLevels        map[string]levelJSONValue `json:"events"`
+		StateDefaultLevel  levelJSONValue            `json:"state_default"`
+		EventDefaultLevel  levelJSONValue            `json:"event_default"`
+		NotificationLevels map[string]levelJSONValue `json:"notifications"`
 	}
 	if err = json.Unmarshal(event.Content(), &content); err != nil {
 		err = errorf("unparsable power_levels event content: %s", err.Error())
@@ -381,6 +392,13 @@ func NewPowerLevelContentFromEvent(event Event) (c PowerLevelContent, err error)
 		c.Events[k] = v.value
 	}
 
+	for k, v := range content.NotificationLevels {
+		if c.Notifications == nil {
+			c.Notifications = make(map[string]int64)
+		}
+		c.Notifications[k] = v.value
+	}
+
 	return
 }
 
@@ -400,11 +418,11 @@ func (v *levelJSONValue) UnmarshalJSON(data []byte) error {
 	var err error
 
 	// First try to unmarshal as an int64.
-	if err = json.Unmarshal(data, &int64Value); err != nil {
+	if int64Value, err = strconv.ParseInt(string(data), 10, 64); err != nil {
 		// If unmarshalling as an int64 fails try as a string.
 		if err = json.Unmarshal(data, &stringValue); err != nil {
 			// If unmarshalling as a string fails try as a float.
-			if err = json.Unmarshal(data, &floatValue); err != nil {
+			if floatValue, err = strconv.ParseFloat(string(data), 64); err != nil {
 				return err
 			}
 			int64Value = int64(floatValue)

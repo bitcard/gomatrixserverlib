@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -22,27 +21,16 @@ type FederationClient struct {
 	serverPrivateKey ed25519.PrivateKey
 }
 
-// NewFederationClient makes a new FederationClient
+// NewFederationClient makes a new FederationClient. You can supply
+// zero or more ClientOptions which control the transport, timeout,
+// TLS validation etc - see WithTransport, WithTimeout, WithSkipVerify,
+// WithDNSCache etc.
 func NewFederationClient(
 	serverName ServerName, keyID KeyID, privateKey ed25519.PrivateKey,
-	skipVerify bool,
+	options ...ClientOption,
 ) *FederationClient {
 	return &FederationClient{
-		Client:           *NewClient(skipVerify),
-		serverName:       serverName,
-		serverKeyID:      keyID,
-		serverPrivateKey: privateKey,
-	}
-}
-
-// NewFederationClientWithTransport makes a new FederationClient with a custom
-// transport.
-func NewFederationClientWithTransport(
-	serverName ServerName, keyID KeyID, privateKey ed25519.PrivateKey,
-	skipVerify bool, transport *http.Transport,
-) *FederationClient {
-	return &FederationClient{
-		Client:           *NewClientWithTransport(skipVerify, transport),
+		Client:           *NewClient(options...),
 		serverName:       serverName,
 		serverKeyID:      keyID,
 		serverPrivateKey: privateKey,
@@ -95,7 +83,7 @@ func (ac *FederationClient) MakeJoin(
 	if len(roomVersions) > 0 {
 		var vqs []string
 		for _, v := range roomVersions {
-			vqs = append(vqs, fmt.Sprintf("ver=%s", v))
+			vqs = append(vqs, fmt.Sprintf("ver=%s", url.QueryEscape(string(v))))
 		}
 		versionQueryString = "?" + strings.Join(vqs, "&")
 	}
@@ -112,7 +100,7 @@ func (ac *FederationClient) MakeJoin(
 // This is used to join a room the local server isn't a member of.
 // See https://matrix.org/docs/spec/server_server/unstable.html#joining-rooms
 func (ac *FederationClient) SendJoin(
-	ctx context.Context, s ServerName, event Event, roomVersion RoomVersion,
+	ctx context.Context, s ServerName, event *Event, roomVersion RoomVersion,
 ) (res RespSendJoin, err error) {
 	res.roomVersion = roomVersion
 	path := federationPathPrefixV2 + "/send_join/" +
@@ -163,7 +151,7 @@ func (ac *FederationClient) MakeLeave(
 // This is used to reject a remote invite.
 // See https://matrix.org/docs/spec/server_server/r0.1.1.html#put-matrix-federation-v1-send-leave-roomid-eventid
 func (ac *FederationClient) SendLeave(
-	ctx context.Context, s ServerName, event Event,
+	ctx context.Context, s ServerName, event *Event,
 ) (err error) {
 	path := federationPathPrefixV2 + "/send_leave/" +
 		url.PathEscape(event.RoomID()) + "/" +
@@ -196,7 +184,7 @@ func (ac *FederationClient) SendLeave(
 // SendInvite sends an invite m.room.member event to an invited server to be
 // signed by it. This is used to invite a user that is not on the local server.
 func (ac *FederationClient) SendInvite(
-	ctx context.Context, s ServerName, event Event,
+	ctx context.Context, s ServerName, event *Event,
 ) (res RespInvite, err error) {
 	path := federationPathPrefixV1 + "/invite/" +
 		url.PathEscape(event.RoomID()) + "/" +
@@ -303,6 +291,31 @@ func (ac *FederationClient) LookupMissingEvents(
 		url.PathEscape(roomID)
 	req := NewFederationRequest("POST", s, path)
 	if err = req.SetContent(missing); err != nil {
+		return
+	}
+	err = ac.doRequest(ctx, req, &res)
+	return
+}
+
+// Peek starts a peek on a remote server: see MSC2753
+func (ac *FederationClient) Peek(
+	ctx context.Context, s ServerName, roomID, peekID string,
+	roomVersions []RoomVersion,
+) (res RespPeek, err error) {
+	versionQueryString := ""
+	if len(roomVersions) > 0 {
+		var vqs []string
+		for _, v := range roomVersions {
+			vqs = append(vqs, fmt.Sprintf("ver=%s", url.QueryEscape(string(v))))
+		}
+		versionQueryString = "?" + strings.Join(vqs, "&")
+	}
+	path := federationPathPrefixV1 + "/peek/" +
+		url.PathEscape(roomID) + "/" +
+		url.PathEscape(peekID) + versionQueryString
+	req := NewFederationRequest("PUT", s, path)
+	var empty struct{}
+	if err = req.SetContent(empty); err != nil {
 		return
 	}
 	err = ac.doRequest(ctx, req, &res)
@@ -462,6 +475,32 @@ func (ac *FederationClient) Backfill(
 
 	// Send the request.
 	req := NewFederationRequest("GET", s, path)
+	err = ac.doRequest(ctx, req, &res)
+	return
+}
+
+// MSC2836EventRelationships performs an MSC2836 /event_relationships request.
+func (ac *FederationClient) MSC2836EventRelationships(
+	ctx context.Context, dst ServerName, r MSC2836EventRelationshipsRequest, roomVersion RoomVersion,
+) (res MSC2836EventRelationshipsResponse, err error) {
+	res.roomVersion = roomVersion
+	path := "/_matrix/federation/unstable/event_relationships"
+	req := NewFederationRequest("POST", dst, path)
+	if err = req.SetContent(r); err != nil {
+		return
+	}
+	err = ac.doRequest(ctx, req, &res)
+	return
+}
+
+func (ac *FederationClient) MSC2946Spaces(
+	ctx context.Context, dst ServerName, roomID string, r MSC2946SpacesRequest,
+) (res MSC2946SpacesResponse, err error) {
+	path := "/_matrix/federation/unstable/org.matrix.msc2946/spaces/" + url.PathEscape(roomID)
+	req := NewFederationRequest("POST", dst, path)
+	if err = req.SetContent(r); err != nil {
+		return
+	}
 	err = ac.doRequest(ctx, req, &res)
 	return
 }

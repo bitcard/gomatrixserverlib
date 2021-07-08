@@ -31,14 +31,14 @@ var emptyStateKey = ""
 
 // separate takes a list of events and works out which events are conflicted and
 // which are unconflicted.
-func separate(events []Event) (conflicted, unconflicted []Event) {
+func separate(events []*Event) (conflicted, unconflicted []*Event) {
 	// The stack maps event type -> event state key -> list of state events.
-	stack := make(map[string]map[string][]Event)
+	stack := make(map[string]map[string][]*Event)
 	// Prepare the map.
 	for _, event := range events {
 		// If we haven't encountered an entry of this type yet, create an entry.
 		if _, ok := stack[event.Type()]; !ok {
-			stack[event.Type()] = make(map[string][]Event)
+			stack[event.Type()] = make(map[string][]*Event)
 		}
 		// Work out the state key in a crash-proof manner.
 		statekey := ""
@@ -77,8 +77,8 @@ func separate(events []Event) (conflicted, unconflicted []Event) {
 	return
 }
 
-func getBaseStateResV2Graph() []Event {
-	return []Event{
+func getBaseStateResV2Graph() []*Event {
+	return []*Event{
 		{
 			roomVersion: RoomVersionV2,
 			fields: eventFormatV1Fields{
@@ -106,10 +106,10 @@ func getBaseStateResV2Graph() []Event {
 					Content:        []byte(`{"membership": "join"}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
+					{EventID: "$CREATE:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
+					{EventID: "$CREATE:example.com"},
 				},
 			},
 		},
@@ -126,11 +126,11 @@ func getBaseStateResV2Graph() []Event {
 					Content:        []byte(`{"users": {"` + ALICE + `": 100}}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$IMA:example.com"},
+					{EventID: "$IMA:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$IMA:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$IMA:example.com"},
 				},
 			},
 		},
@@ -147,12 +147,12 @@ func getBaseStateResV2Graph() []Event {
 					Content:        []byte(`{"join_rule": "public"}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$IPOWER:example.com"},
+					{EventID: "$IPOWER:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$IMA:example.com"},
-					EventReference{EventID: "$IPOWER:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$IMA:example.com"},
+					{EventID: "$IPOWER:example.com"},
 				},
 			},
 		},
@@ -169,12 +169,12 @@ func getBaseStateResV2Graph() []Event {
 					Content:        []byte(`{"membership": "join"}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$IJR:example.com"},
+					{EventID: "$IJR:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$IJR:example.com"},
-					EventReference{EventID: "$IPOWER:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$IJR:example.com"},
+					{EventID: "$IPOWER:example.com"},
 				},
 			},
 		},
@@ -191,12 +191,12 @@ func getBaseStateResV2Graph() []Event {
 					Content:        []byte(`{"membership": "join"}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$IMB:example.com"},
+					{EventID: "$IMB:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$IJR:example.com"},
-					EventReference{EventID: "$IPOWER:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$IJR:example.com"},
+					{EventID: "$IPOWER:example.com"},
 				},
 			},
 		},
@@ -209,7 +209,7 @@ func TestStateResolutionBase(t *testing.T) {
 		"$IMA:example.com", "$IMB:example.com", "$IMC:example.com",
 	}
 
-	runStateResolutionV2(t, []Event{}, expected)
+	runStateResolutionV2(t, []*Event{}, expected)
 }
 
 func TestStateResolutionBanVsPowerLevel(t *testing.T) {
@@ -219,7 +219,7 @@ func TestStateResolutionBanVsPowerLevel(t *testing.T) {
 		"$MB:example.com",
 	}
 
-	runStateResolutionV2(t, []Event{
+	runStateResolutionV2(t, []*Event{
 		{
 			roomVersion: RoomVersionV2,
 			fields: eventFormatV1Fields{
@@ -236,12 +236,12 @@ func TestStateResolutionBanVsPowerLevel(t *testing.T) {
 				}}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$IMZJOIN:example.com"},
+					{EventID: "$IMZJOIN:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$IMA:example.com"},
-					EventReference{EventID: "$IPOWER:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$IMA:example.com"},
+					{EventID: "$IPOWER:example.com"},
 				},
 			},
 		},
@@ -261,12 +261,12 @@ func TestStateResolutionBanVsPowerLevel(t *testing.T) {
 				}}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$IMC:example.com"},
+					{EventID: "$IMC:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$IMA:example.com"},
-					EventReference{EventID: "$IPOWER:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$IMA:example.com"},
+					{EventID: "$IPOWER:example.com"},
 				},
 			},
 		},
@@ -283,12 +283,12 @@ func TestStateResolutionBanVsPowerLevel(t *testing.T) {
 					Content:        []byte(`{"membership": "ban"}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$PA:example.com"},
+					{EventID: "$PA:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$IMA:example.com"},
-					EventReference{EventID: "$PB:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$IMA:example.com"},
+					{EventID: "$PB:example.com"},
 				},
 			},
 		},
@@ -305,12 +305,12 @@ func TestStateResolutionBanVsPowerLevel(t *testing.T) {
 					Content:        []byte(`{"membership": "join"}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$MB:example.com"},
+					{EventID: "$MB:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$IJR:example.com"},
-					EventReference{EventID: "$PA:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$IJR:example.com"},
+					{EventID: "$PA:example.com"},
 				},
 			},
 		},
@@ -324,7 +324,7 @@ func TestStateResolutionJoinRuleEvasion(t *testing.T) {
 		"$IMZ:example.com",
 	}
 
-	runStateResolutionV2(t, []Event{
+	runStateResolutionV2(t, []*Event{
 		{
 			roomVersion: RoomVersionV2,
 			fields: eventFormatV1Fields{
@@ -338,12 +338,12 @@ func TestStateResolutionJoinRuleEvasion(t *testing.T) {
 					Content:        []byte(`{"join_rule": "invite"}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$IMZ:example.com"},
+					{EventID: "$IMZ:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$IMA:example.com"},
-					EventReference{EventID: "$IPOWER:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$IMA:example.com"},
+					{EventID: "$IPOWER:example.com"},
 				},
 			},
 		},
@@ -360,12 +360,12 @@ func TestStateResolutionJoinRuleEvasion(t *testing.T) {
 					Content:        []byte(`{"membership": "join"}`),
 				},
 				PrevEvents: []EventReference{
-					EventReference{EventID: "$JR:example.com"},
+					{EventID: "$JR:example.com"},
 				},
 				AuthEvents: []EventReference{
-					EventReference{EventID: "$CREATE:example.com"},
-					EventReference{EventID: "$JR:example.com"},
-					EventReference{EventID: "$IPOWER:example.com"},
+					{EventID: "$CREATE:example.com"},
+					{EventID: "$JR:example.com"},
+					{EventID: "$IPOWER:example.com"},
 				},
 			},
 		},
@@ -374,13 +374,13 @@ func TestStateResolutionJoinRuleEvasion(t *testing.T) {
 
 func TestLexicographicalSorting(t *testing.T) {
 	input := []*stateResV2ConflictedPowerLevel{
-		&stateResV2ConflictedPowerLevel{eventID: "a", powerLevel: 0, originServerTS: 1},
-		&stateResV2ConflictedPowerLevel{eventID: "b", powerLevel: 0, originServerTS: 2},
-		&stateResV2ConflictedPowerLevel{eventID: "c", powerLevel: 0, originServerTS: 2},
-		&stateResV2ConflictedPowerLevel{eventID: "d", powerLevel: 25, originServerTS: 3},
-		&stateResV2ConflictedPowerLevel{eventID: "e", powerLevel: 50, originServerTS: 4},
-		&stateResV2ConflictedPowerLevel{eventID: "f", powerLevel: 75, originServerTS: 4},
-		&stateResV2ConflictedPowerLevel{eventID: "g", powerLevel: 100, originServerTS: 5},
+		{eventID: "a", powerLevel: 0, originServerTS: 1},
+		{eventID: "b", powerLevel: 0, originServerTS: 2},
+		{eventID: "c", powerLevel: 0, originServerTS: 2},
+		{eventID: "d", powerLevel: 25, originServerTS: 3},
+		{eventID: "e", powerLevel: 50, originServerTS: 4},
+		{eventID: "f", powerLevel: 75, originServerTS: 4},
+		{eventID: "g", powerLevel: 100, originServerTS: 5},
 	}
 	expected := []string{"g", "f", "e", "d", "c", "b", "a"}
 
@@ -411,7 +411,7 @@ func TestReverseTopologicalEventSorting(t *testing.T) {
 	graph := getBaseStateResV2Graph()
 	var base []*Event
 	for i := range graph {
-		base = append(base, &graph[i])
+		base = append(base, graph[i])
 	}
 	input := r.reverseTopologicalOrdering(base, TopologicalOrderByAuthEvents)
 
@@ -443,7 +443,7 @@ func TestReverseTopologicalEventSorting(t *testing.T) {
 	}
 }
 
-func runStateResolutionV2(t *testing.T, additional []Event, expected []string) {
+func runStateResolutionV2(t *testing.T, additional []*Event, expected []string) {
 	input := append(getBaseStateResV2Graph(), additional...)
 	conflicted, unconflicted := separate(input)
 

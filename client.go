@@ -48,23 +48,84 @@ type UserInfo struct {
 	Sub string `json:"sub"`
 }
 
-// NewClient makes a new Client (with default timeout)
-func NewClient(skipVerify bool) *Client {
-	return NewClientWithTimeout(requestTimeout, newFederationTripper(skipVerify))
+type clientOptions struct {
+	transport  http.RoundTripper
+	dnsCache   *DNSCache
+	timeout    time.Duration
+	skipVerify bool
+	keepAlives bool
 }
 
-// NewClientWithTransport makes a new Client with an existing transport
-func NewClientWithTransport(skipVerify bool, transport http.RoundTripper) *Client {
-	return NewClientWithTimeout(requestTimeout, transport)
-}
+// ClientOption are supplied to NewClient or NewFederationClient.
+type ClientOption func(*clientOptions)
 
-// NewClientWithTimeout makes a new Client with a specified request timeout
-func NewClientWithTimeout(timeout time.Duration, transport http.RoundTripper) *Client {
-	return &Client{
+// NewClient makes a new Client. You can supply zero or more ClientOptions
+// which control the transport, timeout, TLS validation etc - see
+// WithTransport, WithTimeout, WithSkipVerify, WithDNSCache etc.
+func NewClient(options ...ClientOption) *Client {
+	clientOpts := &clientOptions{
+		timeout: requestTimeout,
+	}
+	for _, option := range options {
+		option(clientOpts)
+	}
+	if clientOpts.transport == nil {
+		clientOpts.transport = newFederationTripper(
+			clientOpts.skipVerify,
+			clientOpts.dnsCache,
+			clientOpts.keepAlives,
+		)
+	}
+	client := &Client{
 		client: http.Client{
-			Transport: transport,
-			Timeout:   timeout,
+			Transport: clientOpts.transport,
+			Timeout:   clientOpts.timeout,
 		},
+	}
+	return client
+}
+
+// WithTransport is an option that can be supplied to either NewClient or
+// NewFederationClient. Supplying this option will render WithDNSCache and
+// WithSkipVerify ineffective.
+func WithTransport(transport http.RoundTripper) ClientOption {
+	return func(options *clientOptions) {
+		options.transport = transport
+	}
+}
+
+// WithTimeout is an option that can be supplied to either NewClient or
+// NewFederationClient.
+func WithTimeout(duration time.Duration) ClientOption {
+	return func(options *clientOptions) {
+		options.timeout = duration
+	}
+}
+
+// WithDNSCache is an option that can be supplied to either NewClient or
+// NewFederationClient. This option will be ineffective if WithTransport
+// has already been supplied.
+func WithDNSCache(cache *DNSCache) ClientOption {
+	return func(options *clientOptions) {
+		options.dnsCache = cache
+	}
+}
+
+// WithSkipVerify is an option that can be supplied to either NewClient or
+// NewFederationClient. This option will be ineffective if WithTransport
+// has already been supplied.
+func WithSkipVerify(skipVerify bool) ClientOption {
+	return func(options *clientOptions) {
+		options.skipVerify = skipVerify
+	}
+}
+
+// WithKeepAlives is an option that can be supplied to either NewClient or
+// NewFederationClient. This option will be ineffective if WithTransport
+// has already been supplied.
+func WithKeepAlives(keepAlives bool) ClientOption {
+	return func(options *clientOptions) {
+		options.keepAlives = keepAlives
 	}
 }
 
@@ -73,12 +134,17 @@ type federationTripper struct {
 	transports      map[string]http.RoundTripper
 	transportsMutex sync.Mutex
 	skipVerify      bool
+	resolutionCache sync.Map // serverName -> []ResolutionResult
+	dnsCache        *DNSCache
+	keepAlives      bool
 }
 
-func newFederationTripper(skipVerify bool) *federationTripper {
+func newFederationTripper(skipVerify bool, dnsCache *DNSCache, keepAlives bool) *federationTripper {
 	return &federationTripper{
 		transports: make(map[string]http.RoundTripper),
 		skipVerify: skipVerify,
+		dnsCache:   dnsCache,
+		keepAlives: keepAlives,
 	}
 }
 
@@ -95,14 +161,17 @@ func (f *federationTripper) getTransport(tlsServerName string) (transport http.R
 
 	// Create the transport if we don't have any for this TLS server name.
 	if transport, ok = f.transports[tlsServerName]; !ok {
-		transport = &http.Transport{
+		tr := &http.Transport{
+			DisableKeepAlives: !f.keepAlives,
 			TLSClientConfig: &tls.Config{
 				ServerName:         tlsServerName,
 				InsecureSkipVerify: f.skipVerify,
 			},
 		}
-
-		f.transports[tlsServerName] = transport
+		if f.dnsCache != nil {
+			tr.DialContext = f.dnsCache.DialContext
+		}
+		transport, f.transports[tlsServerName] = tr, tr
 	}
 
 	f.transportsMutex.Unlock()
@@ -118,12 +187,30 @@ func makeHTTPSURL(u *url.URL, addr string) (httpsURL url.URL) {
 }
 
 func (f *federationTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	var err error
 	serverName := ServerName(r.URL.Host)
-	resolutionResults, err := ResolveServer(serverName)
-	if err != nil {
-		return nil, err
+	resolutionRetried := false
+	resolutionResults := []ResolutionResult{}
+
+retryResolution:
+	if cached, ok := f.resolutionCache.Load(serverName); ok {
+		if results, ok := cached.([]ResolutionResult); ok {
+			resolutionResults = results
+		}
 	}
 
+	// If the cache returned nothing then we'll have no results here,
+	// so go and hit the network.
+	if len(resolutionResults) == 0 {
+		resolutionResults, err = ResolveServer(serverName)
+		if err != nil {
+			return nil, err
+		}
+		f.resolutionCache.Store(serverName, resolutionResults)
+	}
+
+	// If we still have no results at this point, even after possibly
+	// hitting the network, then give up.
 	if len(resolutionResults) == 0 {
 		return nil, fmt.Errorf("no address found for matrix host %v", serverName)
 	}
@@ -140,6 +227,15 @@ func (f *federationTripper) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 		util.GetLogger(r.Context()).Warnf("Error sending request to %s: %v",
 			u.String(), err)
+	}
+
+	// We failed to reach any of the locations in the resolution results,
+	// so clear the cache and mark that we're retrying, then give it a
+	// try again.
+	f.resolutionCache.Delete(serverName)
+	if !resolutionRetried {
+		resolutionRetried = true
+		goto retryResolution
 	}
 
 	// just return the most recent error

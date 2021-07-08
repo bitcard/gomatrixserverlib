@@ -157,7 +157,7 @@ var emptyEventReferenceList = []EventReference{}
 func (eb *EventBuilder) Build(
 	now time.Time, origin ServerName, keyID KeyID,
 	privateKey ed25519.PrivateKey, roomVersion RoomVersion,
-) (result Event, err error) {
+) (result *Event, err error) {
 	eventFormat, err := roomVersion.EventFormat()
 	if err != nil {
 		return result, err
@@ -259,9 +259,10 @@ func (eb *EventBuilder) Build(
 		return
 	}
 
+	result = &Event{}
 	result.roomVersion = roomVersion
 
-	if err = result.populateFieldsFromJSON(eventJSON); err != nil {
+	if err = result.populateFieldsFromJSON("", eventJSON); err != nil {
 		return
 	}
 
@@ -276,7 +277,7 @@ func (eb *EventBuilder) Build(
 // This checks that the event is valid JSON.
 // It also checks the content hashes to ensure the event has not been tampered with.
 // This should be used when receiving new events from remote servers.
-func NewEventFromUntrustedJSON(eventJSON []byte, roomVersion RoomVersion) (result Event, err error) {
+func NewEventFromUntrustedJSON(eventJSON []byte, roomVersion RoomVersion) (result *Event, err error) {
 	if r := gjson.GetBytes(eventJSON, "_*"); r.Exists() {
 		err = fmt.Errorf("gomatrixserverlib NewEventFromUntrustedJSON: %w", UnexpectedHeaderedEvent{})
 		return
@@ -293,6 +294,7 @@ func NewEventFromUntrustedJSON(eventJSON []byte, roomVersion RoomVersion) (resul
 		}
 	}
 
+	result = &Event{}
 	result.roomVersion = roomVersion
 
 	var eventFormat EventFormat
@@ -307,7 +309,7 @@ func NewEventFromUntrustedJSON(eventJSON []byte, roomVersion RoomVersion) (resul
 		}
 	}
 
-	if err = result.populateFieldsFromJSON(eventJSON); err != nil {
+	if err = result.populateFieldsFromJSON("", eventJSON); err != nil {
 		return
 	}
 
@@ -354,15 +356,34 @@ func NewEventFromUntrustedJSON(eventJSON []byte, roomVersion RoomVersion) (resul
 // NewEventFromTrustedJSON loads a new event from some JSON that must be valid.
 // This will be more efficient than NewEventFromUntrustedJSON since it can skip cryptographic checks.
 // This can be used when loading matrix events from a local database.
-func NewEventFromTrustedJSON(eventJSON []byte, redacted bool, roomVersion RoomVersion) (result Event, err error) {
+func NewEventFromTrustedJSON(eventJSON []byte, redacted bool, roomVersion RoomVersion) (result *Event, err error) {
+	result = &Event{}
 	result.roomVersion = roomVersion
 	result.redacted = redacted
-	err = result.populateFieldsFromJSON(eventJSON)
+	err = result.populateFieldsFromJSON("", eventJSON) // "" -> event ID not known
 	return
 }
 
-// populateFieldsFromJSON takes the
-func (e *Event) populateFieldsFromJSON(eventJSON []byte) error {
+// NewEventFromTrustedJSONWithEventID loads a new event from some JSON that must be valid
+// and that the event ID is already known. This must ONLY be used when retrieving
+// an event from the database and NEVER when accepting an event over federation.
+// This will be more efficient than NewEventFromTrustedJSON since, if the event
+// ID is known, we skip all the reference hash and canonicalisation work.
+func NewEventFromTrustedJSONWithEventID(eventID string, eventJSON []byte, redacted bool, roomVersion RoomVersion) (result *Event, err error) {
+	result = &Event{}
+	result.roomVersion = roomVersion
+	result.redacted = redacted
+	err = result.populateFieldsFromJSON(eventID, eventJSON)
+	return
+}
+
+// populateFieldsFromJSON takes the JSON and populates the event
+// fields with it. If the event ID is already known, because the
+// event came from storage, then we pass it in here as a means of
+// avoiding all of the canonicalisation and reference hash
+// calculations etc as they are expensive operations. If the event
+// ID isn't known, pass an empty string and we'll work it out.
+func (e *Event) populateFieldsFromJSON(eventIDIfKnown string, eventJSON []byte) error {
 	// Work out the format of the event from the room version.
 	var eventFormat EventFormat
 	eventFormat, err := e.roomVersion.EventFormat()
@@ -394,9 +415,13 @@ func (e *Event) populateFieldsFromJSON(eventJSON []byte) error {
 			return err
 		}
 		// Generate a hash of the event which forms the event ID.
-		fields.EventID, err = e.generateEventID()
-		if err != nil {
-			return err
+		if eventIDIfKnown != "" {
+			fields.EventID = eventIDIfKnown
+		} else {
+			fields.EventID, err = e.generateEventID()
+			if err != nil {
+				return err
+			}
 		}
 		// Populate the fields of the received object.
 		fields.fixNilSlices()
@@ -418,9 +443,9 @@ func (e *Event) Version() RoomVersion { return e.roomVersion }
 func (e *Event) JSON() []byte { return e.eventJSON }
 
 // Redact returns a redacted copy of the event.
-func (e *Event) Redact() Event {
+func (e *Event) Redact() *Event {
 	if e.redacted {
-		return *e
+		return e
 	}
 	eventJSON, err := redactEvent(e.eventJSON, e.roomVersion)
 	if err != nil {
@@ -436,39 +461,39 @@ func (e *Event) Redact() Event {
 		roomVersion: e.roomVersion,
 		eventJSON:   eventJSON,
 	}
-	err = result.populateFieldsFromJSON(eventJSON)
+	err = result.populateFieldsFromJSON(e.EventID(), eventJSON)
 	if err != nil {
 		panic(fmt.Errorf("gomatrixserverlib: populateFieldsFromJSON failed %v", err))
 	}
-	return result
+	return &result
 }
 
 // SetUnsigned sets the unsigned key of the event.
 // Returns a copy of the event with the "unsigned" key set.
-func (e *Event) SetUnsigned(unsigned interface{}) (Event, error) {
+func (e *Event) SetUnsigned(unsigned interface{}) (*Event, error) {
 	var eventAsMap map[string]RawJSON
 	var err error
 	if err = json.Unmarshal(e.eventJSON, &eventAsMap); err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	unsignedJSON, err := json.Marshal(unsigned)
 	if err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	eventAsMap["unsigned"] = unsignedJSON
 	eventJSON, err := json.Marshal(eventAsMap)
 	if err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	if eventJSON, err = EnforcedCanonicalJSON(eventJSON, e.roomVersion); err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	if err = e.updateUnsignedFields(unsignedJSON); err != nil {
-		return Event{}, err
+		return nil, err
 	}
 	result := *e
 	result.eventJSON = eventJSON
-	return result, nil
+	return &result, nil
 }
 
 // SetUnsignedField takes a path and value to insert into the unsigned dict of
@@ -1021,8 +1046,8 @@ func (e Event) MarshalJSON() ([]byte, error) {
 
 // Headered returns a HeaderedEvent encapsulating the original event, with the
 // supplied headers.
-func (e Event) Headered(roomVersion RoomVersion) HeaderedEvent {
-	return HeaderedEvent{
+func (e *Event) Headered(roomVersion RoomVersion) *HeaderedEvent {
+	return &HeaderedEvent{
 		EventHeader: EventHeader{
 			RoomVersion: roomVersion,
 		},
